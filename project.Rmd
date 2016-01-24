@@ -1,0 +1,184 @@
+---
+title: "Practical Machine Learning Project"
+output: html_document
+---
+
+
+
+##Executive summary 
+In this project we tried to build a machine learning model to predict the way a person take a lift, through the data obtained by a quantifier device. 
+The detailed project requirements and links to the dataset in internet can be found here <https://www.coursera.org/learn/practical-machine-learning/supplement/PvInj/course-project-instructions-read-first>
+We evaluated two models: CART tree and Random Forest over a training set using cross validation in order to dont have problems with overfitting. Random Forest model had better accuraty and so we chose it.
+
+## Data loading and cleanning
+
+We load the needed libraries and configure multiprocessor calculations in order to have more speed:
+
+```{r, message=FALSE, warning=FALSE}
+library(caret)
+library(rpart)
+library(randomForest)
+
+# parallel processing
+library(parallel)
+library(doParallel)
+# convention to leave 1 core for OS
+cluster <- makeCluster(detectCores() - 1) 
+registerDoParallel(cluster)
+```
+
+We load the data and divide it to have a trainning and a testing set:
+
+
+
+```{r, echo=TRUE}
+set.seed(1)
+trainSet <- read.csv("pml-training.csv", na.strings= c('#DIV/0!', '', 'NA'), stringsAsFactors = FALSE)
+
+trainIndex <- createDataPartition(trainSet$classe, p=0.70, list=FALSE)
+trainSet <- trainSet[ trainIndex,]
+testSet <- trainSet[ -trainIndex,]
+
+```
+
+We consider classe variable as a factor variable:
+
+```{r, echo=TRUE}
+trainSet$classe <- as.factor(trainSet$classe)
+```
+
+
+
+#Exploratory data analysis
+
+Taking a look to the train set we see there are a lot of NA values, some variables are mainly NA:
+
+```{r, echo=TRUE}
+nas <- colSums(is.na(trainSet))/nrow(trainSet)
+plot(nas)
+hist(nas)
+boxplot(nas)
+
+```
+
+There are `r format(sum(nas > 0.97), scientific=F)` variables with more than 97% of NA values. It have no sense to impute that values, and seems more wise to remove them from the model.
+
+```{r, echo=TRUE}
+removeNaVars <- nas > 0.97
+trainSet <- trainSet[, !removeNaVars]
+```
+
+
+##Model building
+
+The first columns are informatives and they dont look like relevants to make predictions, so we remove them. 
+```{r, echo=TRUE}
+removeFirstVars <- c("X", "user_name", "raw_timestamp_part_1", "raw_timestamp_part_2",
+                "cvtd_timestamp", "new_window", "num_window")
+train <- trainSet[, setdiff(names(trainSet), removeFirstVars)]
+```
+
+We see if there are variables with no variations, so we can remove them, but there aren't:
+
+```{r, echo=TRUE}
+removeVars <- nearZeroVar(train)
+```
+
+We will try to see if there are very strong correlated variables, so we can remove some of them getting a similar model but with less variables:
+
+```{r}
+removeCorrelatedVars <- findCorrelation(cor(train[,!names(train) %in% c("classe")]), .9)
+train <- train[, -removeCorrelatedVars]
+```
+
+
+We are going to try a basic tree model (CART): if we can get a model with enough accuracy, it can have good properties (fast predictions, easy interpretation), so perhaps it could be integrated into a werable device.
+
+In order to be sure to get a not overfitted model, we will apply cross validation with the standard 10-folds:
+
+```{r, echo=TRUE, cache=TRUE}
+train_control <- trainControl(method="cv", number=10)
+modelRPART <- train(classe ~ ., data=train, trControl=train_control, method="rpart")
+```
+
+We can see the accuracy of the model in-sample here, which is not very good:
+
+```{r, echo=TRUE}
+modelRPART$results
+```
+
+We are going to predict over the test subset. Before that we must apply over it the same changes we did over training set:
+
+```{r, echo=TRUE}
+testSet$classe <- as.factor(testSet$classe)
+testSet <- testSet[, !removeNaVars]
+test <- testSet[, setdiff(names(testSet), removeFirstVars)]
+test <- test[, -removeCorrelatedVars]
+
+predictionsRPART <- predict(modelRPART, test[,!names(test) %in% c("classe")])
+```
+
+We have an out-sample accuracy of:
+
+```{r, echo=TRUE}
+accuracyRPART <- sum(predictionsRPART == test$classe) / nrow(test)
+accuracyRPART
+```
+and the confusión matrix where we can see what are the outcomes which are more difficult to predict for the model:
+
+```{r, echo=TRUE}
+table(predictionsRPART, test$classe)
+```
+
+We are going to try a new model with the same predictors. Random forest is famous becouse it can have good accuaracy, althoug it is more complex and need more time and computational time to get their predictions. 
+
+```{r, echo=TRUE, cache=TRUE}
+train_control <- trainControl(method="cv", number=10)
+modelRF <- train(classe ~ ., data=train, trControl=train_control, method="rf")
+```
+
+This model is for 500 trees (default value). It looks like more accurecy in-sample than basic tree CART model:
+
+```{r, echo=TRUE}
+modelRF$results
+```
+
+We will try over the test set as we did with the tree CART model:
+
+```{r, echo=TRUE}
+predictionsRF <- predict(modelRF, test[,!names(test) %in% c("classe")])
+```
+
+We have a great out-sample accuracy of:
+
+```{r, echo=TRUE}
+accuracyRF <- sum(predictionsRF == test$classe) / nrow(test)
+accuracyRF
+```
+and the confusión matrix where we can see what are the outcomes which are more difficult to predict for the model is very good:
+
+```{r, echo=TRUE}
+table(predictionsRF, test$classe)
+```
+
+The Random Forests looks like to be the best model here, so will choose it. 
+
+
+##Project 20-values prediction
+
+We are going to predict the 20 values of the project with our Random Forest model.
+
+```{r, echo=TRUE}
+test20 <- read.csv("pml-testing.csv", na.strings= c('#DIV/0!', '', 'NA'), stringsAsFactors = FALSE)
+test20 <- test20[, !removeNaVars]
+test20 <- test20[, setdiff(names(test20), removeFirstVars)]
+test20 <- test20[, -removeCorrelatedVars]
+
+predictions20 <- predict(modelRF, test20)
+predictions20
+```
+
+```{r, echo=TRUE}
+stopCluster(cluster)
+```
+
